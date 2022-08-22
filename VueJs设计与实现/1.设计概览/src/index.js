@@ -3,6 +3,8 @@
 // /* #__PURE__ */ a();
 
 
-import { a } from "./utils";
+import { a, b } from "./utils";
 
 a();
+
+b()

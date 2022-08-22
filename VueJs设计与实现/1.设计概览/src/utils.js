@@ -13,5 +13,6 @@ export const a = () => {
 
 
 export const b = () => {
-  console.log('bbb')
+  let a = 1
+  return a
 }
