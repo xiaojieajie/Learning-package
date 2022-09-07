@@ -291,7 +291,233 @@ digraph G {
   key_1 -> Set
   Set -> effect_1
   Set -> effect_2
+  Set -> "effect_..."
 }
 
 ```
 
+### WeakMap和Map的区别
+
+WeakMap和Map的区别在于，WeakMap的key只能是对象，而Map的key可以是任意类型。这是因为WeakMap的key是弱引用，当key没有被其他变量引用时，会被垃圾回收机制回收。而Map的key是强引用，不会被回收。
+
+来看一段例子
+
+```js
+const map = new Map();
+const weakmap = new WeakMap();
+
+(function(){
+    const foo = {foo: 1};
+    const bar = {bar: 2};
+    map.set(foo, 1);
+    weakmap.set(bar, 2);
+})()
+```
+
+在这段代码中，foo和bar都是局部变量，当函数执行完毕后，它们会被回收。但是，map中的foo会被保留，因为map中的key是强引用，而weakmap中的bar会被回收，因为weakmap中的key是弱引用。
+
+
+## 代码优化
+
+在目前的实现中，当读取到属性值时，我们直接在get拦截函数里编写把副作用函数收集到"桶"里的这部分逻辑，但更好的做法是将这部分逻辑单独封装到一个track函数中。同样，我们也可以把出发副作用函数重新执行的逻辑封装到trigger函数中：
+
+```ts
+
+function track(target, key) {
+  if (!activeEffect) return
+  let depsMap = bucket.get(target)
+  if (!depsMap) bucket.set(target, depsMap = new Map())
+
+  let deps = depsMap.get(key)
+  if (!deps) depsMap.set(key, deps = new Set())
+  deps.add(activeEffect)
+}
+
+function trigger(target, key) {
+  const depsMap = bucket.get(target)
+  if (!depsMap) return
+  const effects = depsMap.get(key)
+
+  effects && effects.forEach(fn => fn())
+}
+
+function reactive(target) {
+  return new Proxy(target, {
+    get(target, key){
+      track(target, key)
+      return target[key]
+    },
+    set(target, key, newVal) {
+      target[key] = newVal
+      trigger(target, key)
+    }
+  })
+}
+```
+
+## 分支切换
+
+首先，我们需要明确分支切换的定义，如下面的代码所示：
+
+```js
+onst data = reactive({ text1: 'hello text1', text2: 'hello text2', ok: true })
+effect(() => {
+  window.text1.innerText = data.ok ? data.text1 : 'not'
+})
+```
+
+在effect函数内部存在一个三元表达式，根据字段ok的值会执行不同的代码分支。当字段ok的值发生变化时，代码执行的分支会跟着变化，这就是所谓的分支切换。
+
+分支切换可能会产生遗留的副作用函数。拿上面这段代码来说，ok的初始值为true，这时会读取obj.text的值，所以当effectFn函数执行时会触发字段data.ok和字段data.text这两个属性的读取操作，此时联系如下
+
+```mermaid
+graph LR
+  data --> ok
+  data --> text
+  ok --> effectFn
+  text --> effectFn
+```
+
+可以看到，副作用函数effectFn分别被字段data.ok和字段data.text所对应的依赖集合收集。理想情况下副作用函数effectFn不应该被字段obj.text所对应的依赖集合收集，如图所示
+
+```mermaid
+graph LR
+  data --> ok
+  ok --> effectFn
+```
+
+但按照前文的实现，我们还做不到这一点。也就是说，当我们把字段data.ok的值修改为false，并触发副作用函数重新执行之后，整个依赖关系仍如上上图一样，这时就产生了遗留的副作用函数。
+
+遗留的副作用函数会导致不必要的更新。当我们的ok为false之后，修改text1的值，都会执行effectFn函数，这是没必要的，因为结果始终是**not**。
+
+
+解决这个问题的思路很简单，每次副作用函数执行时，我们可以先把它从所有与之关联的依赖集合中删除，如下图所示
+
+```mermaid
+graph LR
+  data --> ok
+  data --> text
+  ok -.X.- effectFn
+  text -.X.- effectFn
+```
+
+当副作用函数执行完毕后，会重新建立起联系，但在新的联系中不会包含遗留的副作用函数。所以，如果我们能做到每次副作用函数执行前，将其从相关联的依赖集合中移除，那么问题就迎刃而解了。
+
+要将一个副作用函数从所有与之关联的依赖中移除，就需要明确知道哪些依赖集合中包含它，因此我们需要重新设计副作用函数，如下面的代码所示。我们添加一个deps属性，该属性是一个数组，用来存储所有包含当前副作用函数的依赖集合：
+
+```js
+let activeEffect;
+
+function effect(fn) {
+  const effectFn = () => {
+    activeEffect = effectFn
+    fn()
+    activeEffect = null
+  }
+  effectFn.deps = []
+
+  effectFn()
+}
+```
+
+那么effectFn.deps数组中的依赖是如何收集的呢？其实是在track函数中：
+
+```js
+function track(target, key) {
+  // ...
+  deps.add(activeEffect)
+
+  // deps就是一个与当前副作用函数存在联系的依赖集合
+  activeEffect.deps.push(deps)
+  
+}
+```
+
+如以上代码所示，在track函数中我们将当前执行的副作用函数activeEffect添加到依赖集合deps中，这说明deps就是一个与当前副作用函数存在联系的依赖集合，于是我们也把它添加到deps数组中，这样就完成了对依赖集合的收集。
+
+```mermaid
+graph LR
+
+  okEffectFn --> okSet
+  okEffectFn --> textSet
+  textEffectFn --> textSet
+  textEffectFn --> okSet
+```
+
+有了这个联系后，我们就可以在每次副作用函数执行时，根据effectFn.deps获取所有相关联的依赖集合，近而将副作用函数从依赖集合中移除：
+
+```js
+let activeEffect;
+
+function effect(fn) {
+  const effectFn = () => {
+    cleanup(effectFn)
+    activeEffect = effectFn
+    fn()
+    activeEffect = null
+  }
+
+  effectFn()
+}
+```
+下面是cleanup函数的实现
+```js
+function cleanup(effectFn) {
+  for (let i = 0; i < effectFn.deps.length; i++) {
+    const deps = effectFn.deps[i]
+    // 将effectFn从依赖集合中移除
+    deps.delete(effectFn)
+  }
+  // 最后需要充值effectFn.deps数组
+  effectFn.deps.length = 0
+}
+```
+
+cleanup函数接收副作用函数作为参数，遍历副作用函数的effectFn.deps数组，该数组的每一项都是一个依赖集合，然后将该副作用函数从依赖集合中移除，最后清空deps数组。
+
+至此，我们的响应系统已经可以避免副作用函数产生遗留了。但如果你尝试运行代码，会发现目前的实现会导致无限循环，问题出现在trigger函数中：
+
+```js
+effects && effects.forEach(fn => fn()) //问题出在这句代码
+```
+
+我们遍历effects集合，它是一个Set集合，里面存储着副作用函数。当副作用函数执行时，会调用cleanup进行清除，实际上就是从effects集合中将当前执行的副作用函数剔除，但是副作用函数的执行会导致其重新被收集到集合中，而此时effects集合的遍历仍在进行。这个行为可以用如下简短的代码来表达：
+
+```js
+const set = new Set([1])
+
+set.forEach(item => {
+  set.delete(1)
+  set.add(1)
+  console.log('遍历中')
+})
+
+```
+
+语言规范中对此有明确的说明，在调用forEach遍历Set集合时，如果一个值已经被访问过了，但该值被删除并重新添加到集合，如果此时forEach的遍历没有结束，那么该值会重新被访问。因此，上面的代码会无限执行。解决方法很简单：
+
+```js
+const set = new Set([1])
+const newSet = new Set(set)
+newSet.forEach(item => {
+  set.delete(1)
+  set.add(1)
+  console.log('遍历中')
+})
+```
+
+回到trigger函数，我们需要同样的手段来避免无限执行：
+
+```js
+function trigger(target, key) {
+  const depsMap = bucket.get(target)
+  if (!depsMap) return
+  const effects = depsMap.get(key)
+  if (!effects) return
+  const effectsToRUn = new Set(effects)
+
+  effectsToRUn.forEach(fn => fn())
+  // effects && effects.forEach(effectFn => effectFn()) // 删除
+}
+
+```

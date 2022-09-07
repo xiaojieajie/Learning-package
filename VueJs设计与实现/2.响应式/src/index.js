@@ -52,3 +52,85 @@
 //   map.set(foo, 1)
 //   weakMap.set(bar, 2)
 // })()
+
+
+
+let activeEffect;
+
+const bucket = new WeakMap()
+
+function cleanup(effectFn) {
+  for (let i = 0; i < effectFn.deps.length; i++) {
+    const deps = effectFn.deps[i]
+    deps.delete(effectFn)
+  }
+  
+  effectFn.deps.length = 0
+}
+
+
+function effect(fn) {
+  const effectFn = () => {
+    cleanup(effectFn)
+    activeEffect = effectFn
+    fn()
+    // activeEffect = null
+  }
+  effectFn.deps = []
+
+  effectFn()
+}
+
+function track(target, key) {
+  if (!activeEffect) return
+  let depsMap = bucket.get(target)
+  if (!depsMap) bucket.set(target, depsMap = new Map())
+
+  let deps = depsMap.get(key)
+  if (!deps) depsMap.set(key, deps = new Set())
+  deps.add(activeEffect)
+
+  // deps就是一个与当前副作用函数存在联系的依赖集合
+  activeEffect.deps.push(deps)
+}
+
+function trigger(target, key) {
+  const depsMap = bucket.get(target)
+  if (!depsMap) return
+  const effects = depsMap.get(key)
+
+  if (!effects) return
+  const effectsToRUn = new Set(effects)
+
+  effectsToRUn.forEach(fn => fn())
+}
+
+function reactive(target) {
+  return new Proxy(target, {
+    get(target, key){
+      track(target, key)
+      return target[key]
+    },
+    set(target, key, newVal) {
+      target[key] = newVal
+      trigger(target, key)
+    }
+  })
+}
+
+const data = reactive({ text1: 'hello text1', text2: 'hello text2', ok: true })
+effect(() => {
+  console.log('effect text1')
+  window.text1.innerText = data.ok ? data.text1 : 'not'
+})
+
+effect(() => {
+  window.text3.innerText = data.text1 + '-text3'
+})
+
+effect(() => {
+  console.log('text2 effect')
+  window.text2.innerText = data.text2
+})
+
+
