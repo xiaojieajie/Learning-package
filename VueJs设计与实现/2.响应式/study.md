@@ -521,3 +521,142 @@ function trigger(target, key) {
 }
 
 ```
+
+
+
+## 嵌套的effect与effect栈
+
+
+effect是可以发生嵌套的，例如
+
+```js
+effect(() => {
+  effect(() => {})
+})
+```
+
+什么场景下会出现嵌套的effect呢？拿Vuejs来说，实际上Vue.js的渲染函数就是在一个effect中执行的：
+
+```js
+
+
+// Bar组件
+const Bar = {
+  render() {}
+}
+
+// Foo组件渲染了Bar组件
+const Foo = {
+  render() {
+    return <Bar /> //jsx
+  }
+}
+```
+
+相当于
+
+```js
+effect(() => {
+  Foo.render()
+  effect(() => {
+    Bar.render()
+  })
+})
+```
+这个例子说明了为什么effect要设计成可嵌套的，我们当前的响应系统并不支持嵌套
+
+```js
+effect(() => {
+  console.log('effect1 执行')
+  effect(() => {
+    console.log('effect2 执行')
+    window.text2.innerText = data.text2
+  })
+
+  window.text1.innerText = data.text1
+})
+```
+
+在这种情况下，我们希望当修改text1时回处罚effectFn1执行。由于effectFn2嵌套在effectFn1里，所以会间接触发。但结果并不是这样
+
+当我们修改text1，发现fn1并没有执行，反而使得effectFn2重新执行了。
+
+问题出在下面这段代码
+
+```js
+
+function effect(fn) {
+  const effectFn = () => {
+    cleanup(effectFn)
+    activeEffect = effectFn
+    fn()
+  }
+  effectFn.deps = []
+
+  effectFn()
+
+```
+
+我们用全局变量activeEffect来存储通过effect函数注册的副作用函数，这意味着同一时刻activeEffect所存储的副作用函数只能有一个。当副作用函数发生嵌套时，内层会覆盖外层的。
+
+为了解决这个问题，我们需要一个副作用函数栈effectStack，在副作用函数执行时，将当前副作用函数压入栈中，待副作用函数执行完毕后将其从栈中弹出，并始终让activeEffect指向栈顶的副作用函数。
+
+```js
+
+const effectStack = [] // 新增
+
+function effect(fn) {
+  const effectFn = () => {
+    cleanup(effectFn)
+    // 当调用effect注册的副作用函数时，将副作用函数赋值给activeEffect
+    activeEffect = effectFn
+    // 在调用副作用函数之前将当前副作用函数压入栈中
+    effectStack.push(effectFn)
+    fn()
+    // 在当前副作用函数执行完毕后，将当前副作用函数弹出栈，并把activeEffect还原为之前的值
+    effectStack.pop()
+    activeEffect = effectStack[effectStack.length - 1]
+  }
+  effectFn.deps = []
+
+  effectFn()
+}
+
+```
+
+这样当副作用函数发生嵌套时，栈底存储的就是外层副作用函数，而栈顶存储的是内容副作用函数
+
+## 避免无限递归循环
+
+举个例子
+
+```js
+const data = reactive({ foo: 1 })
+effect(() => data.text1++)
+```
+
+可以看到，在effect注册的副作用函数内有一个自增操作obj.foo++,该操作会引起栈溢出
+
+
+在这个语句中，即会读取obj.foo的值，又会设置obj.foo的值，而这就是导致问题的根本原因。我们可以尝试推理一下代码的执行流程：首先读取obj.foo的值，这会触发track操作，将当前副作用函数收集到"桶"中，接着将"桶"中的副作用函数取出并执行。但问题是该副作用函数正在执行中，还没有执行完毕，就要开始下一次的执行。这样会导致无限递归调用自己。
+
+解决办法并不难，通过分析这个问题我们能够发现，读取和设置是在同一个副作用函数内进行的。此时无论是track时收集的副作用函数，还是trigger时要触发的副作用函数，都是activeEffect。基于此，我们可以在trigger发生时增加守卫条件，如果trigger触发执行的副作用函数与当前正在执行的副作用函数相同，则不触发执行
+
+```js
+function trigger(target, key) {
+  const depsMap = bucket.get(target)
+  if (!depsMap) return
+  const effects = depsMap.get(key)
+
+  const effectsToRun = new Set()
+
+  effects && effects.forEach(effectFn => {
+    if (effectFn !== activeEffect) {
+      effectsToRun.add(effectFn)
+    }
+  })
+  effectsToRun.forEach(fn => fn())
+}
+```
+
+## 调度执行

@@ -57,6 +57,8 @@
 
 let activeEffect;
 
+const effectStack = [] // 
+
 const bucket = new WeakMap()
 
 function cleanup(effectFn) {
@@ -69,13 +71,19 @@ function cleanup(effectFn) {
 }
 
 
-function effect(fn) {
+function effect(fn, options = {}) {
   const effectFn = () => {
     cleanup(effectFn)
     activeEffect = effectFn
+    effectStack.push(effectFn)
     fn()
+    effectStack.pop()
+    activeEffect = effectStack[effectStack.length - 1]
     // activeEffect = null
   }
+
+  // 将options挂载到effectFn上
+  effectFn.options = options
   effectFn.deps = []
 
   effectFn()
@@ -99,10 +107,21 @@ function trigger(target, key) {
   if (!depsMap) return
   const effects = depsMap.get(key)
 
-  if (!effects) return
-  const effectsToRUn = new Set(effects)
+  const effectsToRun = new Set()
 
-  effectsToRUn.forEach(fn => fn())
+  effects && effects.forEach(effectFn => {
+    if (effectFn !== activeEffect) {
+      effectsToRun.add(effectFn)
+    }
+  })
+  effectsToRun.forEach(effectFn => {
+    if (effectFn.options.scheduler) {
+      effectFn.options.scheduler(effectFn)
+    } else {
+      // 否则直接执行副作用函数(之前的默认行为)
+      effectFn()
+    }
+  })
 }
 
 function reactive(target) {
@@ -118,19 +137,31 @@ function reactive(target) {
   })
 }
 
-const data = reactive({ text1: 'hello text1', text2: 'hello text2', ok: true })
-effect(() => {
-  console.log('effect text1')
-  window.text1.innerText = data.ok ? data.text1 : 'not'
-})
+const data = reactive({ text1: 1, text2: 'hello text2', text3: 'hello text3', ok: true })
+// effect(() => {
+//   console.log('effect text1')
+//   window.text1.innerText = data.ok ? data.text1 : 'not'
+// })
+
+// effect(() => {
+//   window.text3.innerText = data.text1 + '-text3'
+// })
+
+// effect(() => {
+//   console.log('text2 effect')
+//   window.text2.innerText = data.text2
+// })
+
+
 
 effect(() => {
-  window.text3.innerText = data.text1 + '-text3'
+  console.log(data.text1)
+}, {
+  scheduler(fn) {
+    setTimeout(fn)
+  }
 })
 
-effect(() => {
-  console.log('text2 effect')
-  window.text2.innerText = data.text2
-})
+data.text1++
 
-
+console.log('结束了')
