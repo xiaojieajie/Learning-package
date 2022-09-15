@@ -660,3 +660,223 @@ function trigger(target, key) {
 ```
 
 ## 调度执行
+
+```js
+function effect(fn, options = {}) {
+  // ...
+  effectFn.options = options // 新增
+  effectFn.deps = []
+}
+
+function trigger(target, key) {
+  const depsMap = bucket.get(target)
+  if (!depsMap) return
+  const effects = depsMap.get(key)
+
+  const effectsToRun = new Set()
+
+  effects && effects.forEach(effectFn => {
+    if (effectFn !== activeEffect) {
+      effectsToRun.add(effectFn)
+    }
+  })
+  effectsToRun.forEach(effectFn => {
+    if (effectFn.options.scheduler) {
+      effectFn.options.scheduler(effectFn)
+    } else {
+      // 否则直接执行副作用函数(之前的默认行为)
+      effectFn()
+    }
+  })
+}
+```
+
+
+```js
+effect(() => {
+  console.log(data.text1)
+}, {
+  scheduler(fn) {
+    setTimeout(fn)
+  }
+})
+```
+
+
+```js
+// scheduler.js
+
+// 定义一个任务队列
+export const jobQueue = new Set()
+
+const p = Promise.resolve()
+
+// 一个标志代表是否正在刷新队列
+let isFlushing = false
+
+export function flushJob() {
+  // 如果队列正在刷新，则什么都不做
+  if (isFlushing) return
+  // 设置为true，代表正在刷新
+  isFlushing = true
+  // 在微任务队列中刷新jobQueue队列
+  p.then(() => {
+    jobQueue.forEach(job => job())
+  }).finally(() => {
+    // 结束后重置 isFulushing
+    isFlushing = false
+  })
+}
+
+// index.js
+effect(() => {
+  console.log(data.text1)
+}, {
+  scheduler(fn) {
+    // 每次调用时，将副作用函数添加到jobQueue队列中
+    jobQueue.add(fn)
+
+    // 调用fluishJob刷新队列
+    flushJob()
+  }
+})
+```
+
+## 计算属性computed与lazy
+
+在讲解计算属性之前，我们需要了解关于懒执行的effect，即lazy的effect。举个例子。
+
+```js
+effect(
+  // 这个函数会立即执行
+  () => {
+    console.log(data.text1)
+  }
+)
+```
+但在某些场景下，我们并不希望它立即执行，而是希望它在需要的时候才执行。我们可以通过在options添加lazy属性来达到目的
+
+```js
+effect(
+  // 这个函数会立即执行
+  () => {
+    console.log(data.text1)
+  },
+  {
+    lazy: true
+  }
+)
+```
+
+如果仅仅能够手动执行副作用函数，其意义并不大。但如果我们把传递给effect的函数看作一个getter，那么这个getter函数可以返回任何值
+
+```js
+const effectFn = effect(
+  () => data.num1 + data.num2,
+  {
+    lazy: true
+  }
+)
+```
+
+为了实现这个目标，我们需要再对effect函数做一些修改：
+
+```js
+const effectFn = () => {
+  // ...
+
+  const res = fn() // 新增
+
+  // ...
+
+  return res
+}
+```
+
+现在我们已经能够实现懒执行的副作用函数，并且能够拿到副作用函数的执行结果了，接下来就可以实现计算属性了：
+
+```js
+function computed(getter) {
+  const effectFn = effect(getter, {
+    lazy: true
+  })
+
+  const obj = {
+    // 当读取到value时，才执行effectFn
+    get value() {
+      return effectFn()
+    }
+  }
+
+  return obj
+}
+
+```
+
+可以看到它能够正确的工作。不过现在我们实现的计算属性只做到了懒计算，也就是说，只有当你真正读取sumRes.value时，它才会进行计算并得到值。但是还做不到对值进行缓存，也就是说，我们多次访问sumRes.value的值，会导致effectFn进行多次计算。
+
+下面实现一下值的缓存
+
+```js
+function computed(getter) {
+  // value 用来缓存上一次的值
+  let value
+  // dirty标志，用来标识是否需要重新计算值，为true则意味着'脏', 需要计算
+  let dirty = true
+
+  const effectFn = effect(getter, {
+    lazy: true
+  })
+
+  const obj = {
+    // 当读取到value时，才执行effectFn
+    get value() {
+      if (dirty) {
+        value = effectFn()
+        dirty = false
+      }
+      return value
+    }
+  }
+
+  return obj
+}
+```
+
+我们新增了两个变量value和dirty，其中value用来缓存上一次计算的值，而dirty代表值是否需要重新计算。这里存在一个问题，如果此时我们修改data.num1或data.num2的值，再访问sumRes.value会发现访问到的值没有发生变化
+
+这是因为，dirty的值并没有在其他地方重新设置。
+
+解决方法很简单，当data.num1或者data.num2的值发生变化时，只要dirty的值重新重置为true就可以了，如下所示
+
+```js
+const effectFn = effect(getter, {
+    lazy: true,
+    scheduler() {
+      dirty = true
+      console.log('执行？')
+    }
+  })
+```
+
+
+我们为effect添加了scheduler调度器函数，它会在getter函数所依赖的响应式数据变化时执行，这样我们在scheduler函数内将dirty重置为true，当下一次访问sumRes.value时，就会重新调用effectFn计算值。
+
+现在，我们设计的计算属性已经趋于完美的，但还有一个缺陷，如下：
+
+```js
+const sumRes = computed(() => data.num1 + data.num2)
+
+effect(() => {
+  console.log(sumRes.value)
+})
+
+data.num1++
+```
+
+我们期望此时修改data.num1的值，副作用函数会重新执行。但是并不会。
+
+分析问题的原因，我们发现，从本质上看这就是一个典型的effect嵌套。一个计算属性内部拥有自己的effect，并且它是懒执行的，只有当读取value的时候才会执行，对于计算属性的getter函数来说，它里面访问的响应式数据只会把computed内部的effect收集为依赖。而当把计算属性用于另外一个effect时，就会发生effect嵌套。外层的effect不会被内层effect中的响应式数据收集。
+
+解决方案是：当读取计算属性的值时，我们可以手动调用track函数进行追踪；当计算属性依赖的响应式数据发生变化时，我们可以手动调用trigger函数触发响应；
+

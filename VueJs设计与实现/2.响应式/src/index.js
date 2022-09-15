@@ -1,3 +1,5 @@
+import { jobQueue, flushJob } from './scheduler.js'
+
 // let activeEffect
 
 // function effect(fn) {
@@ -61,6 +63,8 @@ const effectStack = [] //
 
 const bucket = new WeakMap()
 
+window.bbbb = bucket
+
 function cleanup(effectFn) {
   for (let i = 0; i < effectFn.deps.length; i++) {
     const deps = effectFn.deps[i]
@@ -76,17 +80,21 @@ function effect(fn, options = {}) {
     cleanup(effectFn)
     activeEffect = effectFn
     effectStack.push(effectFn)
-    fn()
+    const res = fn()
     effectStack.pop()
     activeEffect = effectStack[effectStack.length - 1]
-    // activeEffect = null
+    return res
   }
 
   // 将options挂载到effectFn上
   effectFn.options = options
   effectFn.deps = []
+  if (!options.lazy) {
+    effectFn()
+  }
+  return effectFn
 
-  effectFn()
+  
 }
 
 function track(target, key) {
@@ -133,11 +141,44 @@ function reactive(target) {
     set(target, key, newVal) {
       target[key] = newVal
       trigger(target, key)
+
+      return true
     }
   })
 }
 
-const data = reactive({ text1: 1, text2: 'hello text2', text3: 'hello text3', ok: true })
+function computed(getter) {
+  // value 用来缓存上一次的值
+  let value
+  // dirty标志，用来标识是否需要重新计算值，为true则意味着'脏', 需要计算
+  let dirty = true
+
+  const effectFn = effect(getter, {
+    lazy: true,
+    scheduler() {
+      dirty = true
+      console.log('我遍了')
+      // 当计算属性依赖的响应式数据变化时，手动调用trigger函数触发响应
+      trigger(obj, 'value')
+    }
+  })
+
+  const obj = {
+    // 当读取到value时，才执行effectFn
+    get value() {
+      if (dirty) {
+        value = effectFn()
+        dirty = false
+      }
+      track(obj, 'value')
+      return value
+    }
+  }
+
+  return obj
+}
+
+const data = reactive({ text1: 1, text2: 'hello text2', text3: 'hello text3', ok: true, num1: 1, num2: 2 })
 // effect(() => {
 //   console.log('effect text1')
 //   window.text1.innerText = data.ok ? data.text1 : 'not'
@@ -152,16 +193,13 @@ const data = reactive({ text1: 1, text2: 'hello text2', text3: 'hello text3', ok
 //   window.text2.innerText = data.text2
 // })
 
+window.data = data
 
+const sumRes = computed(() => data.num1 + data.num2)
 
 effect(() => {
-  console.log(data.text1)
-}, {
-  scheduler(fn) {
-    setTimeout(fn)
-  }
+  console.log(sumRes.value)
 })
 
-data.text1++
+data.num1++
 
-console.log('结束了')
