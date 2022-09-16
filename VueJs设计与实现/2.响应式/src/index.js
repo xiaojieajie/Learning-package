@@ -195,11 +195,20 @@ const data = reactive({ text1: 1, text2: 'hello text2', text3: 'hello text3', ok
 
 window.data = data
 
-const sumRes = computed(() => data.num1 + data.num2)
-
 effect(() => {
-  console.log(sumRes.value)
+  window.text1.innerText = data.text1
 })
 
-data.num1++
+effect(() => {
+  window.text2.innerText = data.text2
+})
 
+effect(() => {
+  window.text3.innerText = data.text3
+}, {
+  scheduler(fn) {
+    setTimeout(() => {
+      fn()
+    }, 2000)
+  }
+})

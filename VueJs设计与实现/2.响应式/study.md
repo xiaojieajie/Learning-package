@@ -880,3 +880,55 @@ data.num1++
 
 解决方案是：当读取计算属性的值时，我们可以手动调用track函数进行追踪；当计算属性依赖的响应式数据发生变化时，我们可以手动调用trigger函数触发响应；
 
+```js
+function computed(getter) {
+  // value 用来缓存上一次的值
+  let value
+  // dirty标志，用来标识是否需要重新计算值，为true则意味着'脏', 需要计算
+  let dirty = true
+
+  const effectFn = effect(getter, {
+    lazy: true,
+    scheduler() {
+      dirty = true
+      console.log('我遍了')
+      // 当计算属性依赖的响应式数据变化时，手动调用trigger函数触发响应
+      trigger(obj, 'value')
+    }
+  })
+
+  const obj = {
+    // 当读取到value时，才执行effectFn
+    get value() {
+      if (dirty) {
+        value = effectFn()
+        dirty = false
+      }
+      track(obj, 'value')
+      return value
+    }
+  }
+
+  return obj
+}
+```
+
+如以上代码所示，当读取一个计算属性的value值时，我们手动调用track函数。当计算属性所依赖的响应式数据变化时，会执行调度器函数，在调度器函数内手动调用trigger函数触发响应即可。
+
+这时对于如下代码来说：
+
+```js
+effect(function effectFn() {
+  console.log(sumRes.value)
+})
+```
+
+它会建立这样的联系：
+
+```mermaid
+graph LR
+  computed-obj --> value --> effectFn
+```
+
+## watch
+
