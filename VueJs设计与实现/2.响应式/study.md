@@ -932,3 +932,239 @@ graph LR
 
 ## watch
 
+```js
+
+function watch(source, cb) {
+  let getter;
+
+  // 定义旧值与新值
+  let oldVal, newVal;
+
+  // 如果source是函数，说明用户传递的是getter，所以直接把source赋值给getter
+  if (typeof source === 'function') {
+    getter = source
+  } else {
+    getter = () => traverse(source)
+  }
+  // 使用effect注册副作用函数时，开启lazy选项，并把返回值存储到effectFn中以便后续调用
+  const effectHandler = effect(
+    () => getter(),
+    {
+      scheduler() {
+        // 在scheduler 中重新执行副作用函数，得到的是新值
+        newVal = effectHandler()
+        // 将旧值和新值作为回调函数的参数
+        cb(newVal, oldVal)
+        // 更新旧值，不然下一次会得到错误的值
+        oldVal = newVal
+      },
+      lazy: true
+    }
+  )
+  // 手动调用副作用函数，拿到的就是旧值
+  oldVal = effectHandler()
+}
+
+function traverse(value, seen = new Set()) {
+  // 如果要读取的数据是原始值，或者已经被读取过了，那么什么都不做
+  if (typeof value !== 'object' || value === null || seen.has(value)) return
+
+  // 将数据添加到seen中，代表遍历地读取过了，避免循环引用引起的死循环
+  seen.add(value)
+  // 暂时不考路数组等其他结构
+
+  // 假设value 就是个对象，使用for...in读取对象的每一个值，并递归的调用traverse进行处理
+
+  for (const k in value) {
+    traverse(value[k], seen)
+  }
+
+  return value
+}
+
+
+```
+
+## 立即执行的watch与回调执行时间
+
+```js
+
+function watch(source, cb, options) {
+  let getter;
+
+  // 定义旧值与新值
+  let oldVal, newVal;
+
+  // 如果source是函数，说明用户传递的是getter，所以直接把source赋值给getter
+  if (typeof source === 'function') {
+    getter = source
+  } else {
+    getter = () => traverse(source)
+  }
+  // 使用effect注册副作用函数时，开启lazy选项，并把返回值存储到effectFn中以便后续调用
+
+  // 提取 scheduler 调度函数为一个独立的 job 函数
+  const job = () => {
+    // 在scheduler 中重新执行副作用函数，得到的是新值
+    newVal = effectHandler()
+    // 将旧值和新值作为回调函数的参数
+    cb(newVal, oldVal)
+    // 更新旧值，不然下一次会得到错误的值
+    oldVal = newVal
+  }
+  const effectHandler = effect(
+    () => getter(),
+    {
+      scheduler() {
+        if (options.flush === 'post') {
+          const p = Promise.resolve()
+          p.then(job)
+        } else {
+          job()
+        }
+        
+      },
+      lazy: true
+    }
+  )
+  if (options.immediate) {
+    job()
+  } else {
+    // 手动调用副作用函数，拿到的就是旧值
+    oldVal = effectHandler()
+  }
+  
+}
+
+```
+## 过期的副作用
+
+竟态问题通常在多线程或者多进程编程中被提及，但是在单线程的JavaScript中也存在竟态问题，比如下面的代码：
+
+```js
+let finalData;
+
+watch(obj, async () => {
+  // 发送请求
+  const res = await fetch('/path/to/request')
+  // 存储数据
+  finalData = res
+})
+```
+
+观察上面的代码。乍一看似乎没什么问题。但仔细思考会发现这段代码会发生竞态问题。假设我们第一次修改了obj对象的某个字段，这会导致回调函数执行，同时发送了第一次请求A，随着时间的推移，在请求A的结果返回之前，我们对obj对象的某个字段值进行了二次修改。这会导致发送第二次请求B。此时请求A和请求B都在进行中，那么哪一个请求会先返回结果呢？我们不确定，如果请求B先于请求A返回结果，就会导致finalData中存储的是A请求的结果。
+
+但由于请求B是后发送的，因此我们认为请求B返回的数据才是**最新的**，而请求A则应该被视为"过期"的，所以我们希望变量finalData存储的值应该是由请求B返回的结果，而非请求A返回的结果。
+
+归根结底，我们需要的是一个让副作用过期的手段。我们先拿Vuejs中的watch函数来复现场景。
+
+在Vuejs中，watch函数的回调函数接受第三个参数onInvalidate，它是一个函数，类似于事件监听器，我们可以使用onInvalidate函数注册一个回调，这个回调函数会在当前副作用函数过期时执行：
+
+```js
+function watch(source, cb, options) {
+  let getter;
+
+  
+  // 如果source是函数，说明用户传递的是getter，所以直接把source赋值给getter
+  if (typeof source === 'function') {
+    getter = source
+  } else {
+    getter = () => traverse(source)
+  }
+  // 使用effect注册副作用函数时，开启lazy选项，并把返回值存储到effectFn中以便后续调用
+
+  // 定义旧值与新值
+  let oldVal, newVal;
+
+  // cleanup 用来存储用户注册的过期回调
+  let cleanup
+
+  function onInvalidate(fn) {
+    // 将过期回调存储到cleanup中
+    cleanup = fn
+  }
+
+  // 提取 scheduler 调度函数为一个独立的 job 函数
+  const job = () => {
+    // 在scheduler 中重新执行副作用函数，得到的是新值
+    newVal = effectHandler()
+
+    // 在调用回调函数之前，先调用过期回调
+    cleanup && cleanup()
+    // 将旧值和新值作为回调函数的参数
+    cb(newVal, oldVal, onInvalidate)
+    // 更新旧值，不然下一次会得到错误的值
+    oldVal = newVal
+  }
+  const effectHandler = effect(
+    () => getter(),
+    {
+      scheduler() {
+        if (options.flush === 'post') {
+          const p = Promise.resolve()
+          p.then(job)
+        } else {
+          job()
+        }
+      },
+      lazy: true
+    }
+  )
+  if (options.immediate) {
+    job()
+  } else {
+    // 手动调用副作用函数，拿到的就是旧值
+    oldVal = effectHandler()
+  }
+  
+}
+
+```
+
+在这段代码中，我们首先定义了cleanup变量，这个变量用来存储用户通过onInvalidate函数注册的过期回调。这里的关键点在job函数内，每次执行回调函数cb之前，先检查是否存在过期回调，如果存在，则执行过期回调函数cleanup。
+
+我们通过一个例子来说明：
+
+```js
+watch(data, async (newVal, oldVal, onInvalidate) => {
+  let expired = false
+
+  onInvalidate(() => {
+    expired = true
+  })
+
+  const res = await fetch('/path/xxx/xxx')
+
+  if (!expired) {
+    result = res
+  }
+  
+}) 
+// 第一次修改
+data.text1++
+
+setTimeout(() => {
+  // 200ms 后做第二次修改
+  data.text1++
+}, 200)
+```
+
+如以上代码所示，我们修改了两次data.text1的值。由于在watch回调函数第一次执行的时候，我们已经注册了一个过期回调，所以在watch的回调函数第二次执行之前，会优先执行之前注册的过期回调，这会使得第一次执行的副作用函数内闭包的变量expired的值变为true，即副作用函数的执行过期了。于是等请求A的结果返回时，其结果会被抛弃，从而避免了过期副作用函数带来的影响。如图所示
+
+![](src/assets/2.png)
+
+# 总结
+
+一个响应式数据最基本的实现依赖于对“读取”和“设置”操作的拦截，从而在副作用函数与响应式数据之前建立联系。在“读取”操作发生时，我们将当前执行的副作用函数存储到“桶”中；当“设置”操作发生时，再将副作用函数从“桶”里取出来并执行。这就是响应系统的根本实现原理。
+
+接着，我们实现了一个相对完善的响应系统。使用WeakMap配合了Map建立了新的“桶”结构，从而能够在响应式数据与副作用函数之间建立更加精确的联系。
+
+1. 修改桶结构
+2. 分支切换的冗余副作用问题，这个问题会导致副作用函数进行不必要的更新。为了解决这个问题，威们需要在每次副作用函数重新执行之前，清楚上一次建立的响应联系，而当副作用函数重新执行后，会再次建立新的响应联系，新的响应联系中不存在冗余副作用问题。
+3. 我们还遇到了遍历Set数据结构导致无限循环的问题，该问题产生的原因可以从ECMA规范中得知，即“调用forEach遍历Set集合时，如果一个值已经被访问过了，但这个值被删除并重新添加到集合，如果此时forEach遍历没有结束，那么这个值会重新被访问”。解决方案时建立一个新的Set数据结构用来便利。
+4. 副作用的嵌套问题。在实际场景中，嵌套的副作用函数发生在组件嵌套的场景中，即父子组件关系。这时为了避免响应式数据与副作用函数之间建立的响应式联系发生错乱，我们需要使用副作用函数栈来存储不同的副作用函数。当一个副作用函数执行完毕后，将其从栈中弹出。当读取响应式数据的时候，被读取的响应式数据只会与当前站定的副作用函数建立响应联系。而后，我们遇到了副作用函数无限递归地调用自身，导致栈溢出的问题。该问题的根本原因在于，对响应式数据的读取和设置发生在同一个副作用函数内。解决办法很简单，如果trigger触发执行的副作用与当前正在执行的副作用函数相同，则不触发执行
+5. 随后，我们讨论了响应系统的可调度性。所谓可调度，指的是当trigger动作触发副作用函数重新执行时，有能力决定副作用函数执行的时机、次数以及方式。我们通过scheduler选项指定调度器，这样用户可以通过调度器自行完成任务的调度。
+6. 通过微任务队列对调度器任务进行去重
+7. 计算属性，即通过lazy选项使得副作用函数可以懒执行。利用这个特点，我们设计了计算属性，当读取计算属性的值时，只需要手动执行副作用函数即可。
+8. watch。它本质上利用了副作用函数的可调度性。
+9. 最后，我们讨论了过期的副作用函数，它会导致竟态问题
