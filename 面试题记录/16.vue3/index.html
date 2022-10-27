@@ -1,0 +1,32 @@
+<div id="app">
+    <h3>{{title}}</h3>
+</div>
+
+<!-- <script src="http://unpkg.com/vue@next"></script> -->
+<script src="./vue3.js" type="module"></script>
+<script type="module">
+    import { Vue, reactive } from './vue3.js'
+
+    // 响应式：将传入reactive对象做一层代理
+    
+
+    const app = Vue.createApp({
+        data() {
+            return {
+                title1: 'hello, vue3!"'
+            }
+        },
+        setup() {
+            const state = reactive({
+                title2: 'vue3, hello!'
+            })
+            window.state = state
+            // const state = {
+            //     title2: '我是setup里面的'
+            // }
+            return state
+        }
+    })
+
+    app.mount('#app')
+</script>

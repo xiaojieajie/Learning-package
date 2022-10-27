@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<style>
+    *{
+        margin: 0;
+        padding: 0;
+    }
+    .father {
+        width: 100px;
+        height: 100px;
+        background-color: #cfa;
+        /* overflow: hidden; */
+        /* display: flex; */
+        /* position: absolute; */
+        /* position: fixed; */
+        /* display: flow-root; */
+        /* display: inline-block; */
+    }
+    .son {
+        width: 50px;
+        height: 50px;
+        background-color: #f41;
+        margin-top: 100px;
+    }
+</style>
+<body>
+    <!-- BFC Block Formatting Context 块级格式化上下文 -->
+    <!-- BFC 新的渲染规则 -->
+
+    <!-- BFC包裹子元素（浮动元素，margin塌陷，margin合并） -->
+    <!-- <div class="father">
+        <div class="son"></div>
+    </div> -->
+    <!-- BFC + 浮动实现多栏布局 -->
+    <!-- BFC 兄弟元素，位置分明 -->
+    <style>
+        .left, .right {
+            width: 100px;
+            height: 100px;
+            background-color: #fac;
+            float: left;
+        }
+        .right {
+            float: right;
+        }
+        .center {
+            height: 150px;
+            background-color: #f30;
+            /* overflow: hidden; */
+            display: flex;
+            /* position: absolute; */
+            /* position: fixed; */
+            /* display: flow-root; */
+            /* display: inline-block; */
+        }
+
+        
+    </style>
+    <div class="wrapper">
+        <div class="left"></div>
+        <div class="right"></div>
+        <div class="center"></div>
+    </div>
+
+
+</body>
+</html>

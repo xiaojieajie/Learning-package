@@ -1,0 +1,24 @@
+{
+  "name": "data-structures-and-algorithms",
+  "version": "1.0.0",
+  "description": "- [x]  [删除排序数组中的重复项](初级/数组/删除数组中的重复项/描述.md)\r - [x]  [存在重复元素](初级/数组/存在重复元素/描述.md) \r - [x]  [只出现过一次的数字](初级/数组/只出现一次的数字/描述.md)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaojieajie/Data-Structures-and-algorithms.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/xiaojieajie/Data-Structures-and-algorithms/issues"
+  },
+  "homepage": "https://github.com/xiaojieajie/Data-Structures-and-algorithms#readme",
+  "devDependencies": {
+    "@black-tooth/eslint-config": "^0.0.13",
+    "eslint": "^8.11.0",
+    "typescript": "^4.6.2"
+  }
+}
