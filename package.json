@@ -1,0 +1,25 @@
+{
+  "name": "learning-package",
+  "version": "1.0.0",
+  "description": "1. [防抖和节流](面试题记录/1.防抖和节流.js) 2. [浏览器任务](面试题记录/2.浏览器任务.js)",
+  "main": "index.js",
+  "scripts": {
+    "generate": "esno index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaojieajie/Learning-package.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/xiaojieajie/Learning-package/issues"
+  },
+  "homepage": "https://github.com/xiaojieajie/Learning-package#readme",
+  "devDependencies": {
+    "@types/node": "^18.11.7",
+    "esno": "^0.16.3",
+    "typescript": "^4.8.4"
+  }
+}
