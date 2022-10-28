@@ -2,8 +2,14 @@ import { readdirSync, writeFile, writeFileSync } from 'fs'
 import { stat, readdir } from "fs/promises";
 import path, { resolve } from 'path';
 
+interface IConfig {
+  type?: 'single' | 'all',
+  exclude?: string[]
+  include?: string[]
+}
+
 interface IOptions {
-  [key: string]: {}
+  [key: string]: IConfig
 }
 
 const filterBaseFile = ['.git', 'node_modules']
@@ -50,22 +56,49 @@ function getAllFolder(files: string[]) {
  * @param base 根目录名称
  * @returns string[]
  */
-async function floderGeneratorText(floder: string[], contentArr: string[], base?: string) {
+async function floderGeneratorText(floder: string[], contentArr: string[], base?: string, options?: IConfig) {
   const context = sortContent(await readdir(floder[floder.length - 1]))
 
+  const succCondition = () => {
+    if (!options?.include) {
+      return context.includes('readme.md')
+    }
+    return options.include.map(name => context.includes(name)).some(it => it)
+  }
+
+  const returnCondition = () => {
+    if (!options?.exclude) {
+      return false
+    }
+    return options.exclude.map(name => context.includes(name)).some(it => it)
+  }
+  const isTarget = succCondition()
   // 如果该文件夹存在readme.md文件，则停止查找，也就是递归出口
-  if (context.includes('readme.md')) {
+  if (succCondition()) {
     const basename = base || floder
+
+    if (options?.type === 'all') {
+      contentArr.pop()
+      contentArr.push(`- [${ basename}](${floder.map(it => path.basename(it)).join('/')}/${options.include?.find(name => context.includes(name))})`)
+      return contentArr
+    }
     contentArr.push(`- [${ basename}](${floder.map(it => path.basename(it)).join('/')}/readme.md)`)
-    return contentArr
+    // 如果存在过滤的条件，则直接返回arr
+    // return contentArr
+    if (returnCondition()) return contentArr
   }
   // 继续递归查找
   for (const filename of context) {
     const path = resolve(__dirname, floder[floder.length - 1], filename)
     const isDirectory = (await getStat(path)).isDirectory
+
     if (isDirectory) {
+
+      if (options?.type === 'all') {
+        contentArr.push(`${new Array(floder.length).fill('#').join('')} ${filename}`)
+      }
       floder.push(path)
-      await floderGeneratorText(floder, contentArr, filename )
+      await floderGeneratorText(floder, contentArr, filename, options)
       floder.pop()
     }
   }
@@ -102,10 +135,10 @@ async function start(files: string[], options: IOptions = {}) {
   for (const floder of floders) {
     const arr = new Array(1).fill(`# ${floder}`)
     
-    if (options[floder]) {
+    if (options[floder] && options[floder].type === 'single') {
       result = await floderGeneratorTextSingle(floder, arr)
     } else {
-      result = await floderGeneratorText([floder], arr, '')
+      result = await floderGeneratorText([floder], arr, '', options[floder])
     }
     contentArr.push(...result)
     
@@ -118,6 +151,11 @@ async function start(files: string[], options: IOptions = {}) {
 start(allFiles, {
   '面试题记录': {
     type: 'single'
+  },
+  'leetcode': {
+    type: 'all',
+    exclude: ['assets'],
+    include: ['描述.md', 'index.ts', 'index.js']
   }
 })
 
