@@ -90,11 +90,11 @@ async function floderGeneratorTextSingle(floder: string, contentArr: string[]) {
     if (isFile) {
       contentArr.push(`- [${filename}](${floder}/${filename})`)
     }
-    
   }
   return contentArr
 }
 
+// 启动函数
 async function start(files: string[], options: IOptions = {}) {
   const floders = await getAllFolder(files)
   const contentArr: string[] = []
